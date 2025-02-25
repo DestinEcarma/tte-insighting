@@ -13,6 +13,7 @@ def fit_weights_model(
 ) -> te_weights_fitted:
     data["treatment"] = pd.Categorical(data["treatment"], categories=[0, 1])
 
+    # FIXME: `parsnip.fit()` is not a function in the `astro-parsnip` package
     parsnip_fit = parsnip.fit(object.model_spec, formula, data=data)
 
     if object.save_path is not None:

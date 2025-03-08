@@ -8,3 +8,7 @@ wheels/
 
 # venv
 .venv
+
+# trial sequence
+trial_itt/
+trial_pp/

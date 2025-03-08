@@ -15,6 +15,32 @@ class te_data:
         self.nobs = nobs
         self.n = n
 
+    def __str__(self):
+        n = f" - N: {self.nobs} observations from {self.n} patients\n"
+        data = self.data[
+            list(
+                set(self.data.columns)
+                - set(
+                    [
+                        "time_of_event",
+                        "first",
+                        "am_1",
+                        "cumA",
+                        "switch",
+                        "regime_start",
+                        "eligible0",
+                        "eligible1",
+                        "p_n",
+                        "p_d",
+                        "pC_n",
+                        "pC_d",
+                    ]
+                )
+            )
+        ]
+
+        return f"{n}{data}"
+
 
 class te_stats_glm_logit:
     def __init__(self, save_path: str):
@@ -29,30 +55,34 @@ class te_weights_spec:
         self.pool_numerator = kwargs.get("pool_numerator", False)
         self.pool_denominator = kwargs.get("pool_denominator", False)
         self.model_fitter = kwargs.get("model_fitter", None)
+        self.fitted = kwargs.get("fitted", {})
+        self.data_subset_expr = kwargs.get("data_subset_expr", {})
 
-    def __repr__(self):
-        numerator = (
-            f"Numerator formula: {self.numerator}\n"
-            if self.numerator is not None
-            else ""
-        )
-        denominator = (
-            f"Denominator formula: {self.denominator}\n"
-            if self.denominator is not None
-            else ""
-        )
-        pool = (
-            f"Numerator model is {"pooled across treatment arms" if self.pool_numerator else "not pooled"}. Denominator model is {"pooled" if self.pool_denominator else 'not pooled'}\n"
-            if self.pool_numerator or self.pool_denominator
-            else ""
-        )
+    def __str__(self):
+        numerator = f"Numerator formula: {self.numerator}\n"
+        denominator = f"Denominator formulat: {self.denominator}\n"
+
+        if self.pool_numerator:
+            if self.pool_denominator:
+                pool = "Numerator and denominotor models are pooled across treatment arms.\n"
+            else:
+                pool = "Numerator model is pooled across treatment arms. Denominator model is not pooled.\n"
+        else:
+            pool = ""
+
         model_fitter = (
             f"Model fitter type: {self.model_fitter.__class__.__name__}\n"
-            if self.model_fitter is not None
-            else ""
         )
 
-        return f"{numerator}{denominator}{pool}{model_fitter}"
+        if len(self.fitted) > 0:
+            fitted = "View weight model summaries with show_weight_models()\n"
+        else:
+            fitted = "Weight models not fitted. Use calculate_weights()\n"
+
+        return f"{numerator}{denominator}{pool}{model_fitter}{fitted}"
+
+    def __repr__(self):
+        return str(self)
 
 
 class te_weights_fitted:
@@ -60,3 +90,12 @@ class te_weights_fitted:
         self.label = kwargs.get("label", None)
         self.summary = kwargs.get("summary", None)
         self.fitted = kwargs.get("fitted", None)
+
+    def __str__(self):
+        model = f"Model: {self.label}\n\n"
+        summary = ""
+
+        for df in self.summary.values():
+            summary += f"{df.to_string(index=False)}\n\n"
+
+        return f"{model}{summary}"

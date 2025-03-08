@@ -1,9 +1,16 @@
+import warnings
+
 import pandas as pd
+from statsmodels.genmod.generalized_linear_model import \
+    PerfectSeparationWarning
 
 from trial_sequence.calculate_weights import (calculate_censor_weights,
                                               calculate_switch_weights)
 from trial_sequence.data_manipulation import data_manipulation
 from trial_sequence.utils import te_data, te_stats_glm_logit, te_weights_spec
+
+warnings.simplefilter("ignore", category=RuntimeWarning)
+warnings.simplefilter("ignore", PerfectSeparationWarning)
 
 
 class trial_sequence:
@@ -36,7 +43,7 @@ Trial Sequence Object
 Estimand: {trial_sequence.estimands[self.estimand]}
 
 Data:
-{self.data.data.head() if self.data is not None else None}
+{self.data}
         """
 
     def set_data(
@@ -69,6 +76,7 @@ Data:
             "dose",
             "assigned_treatment",
         } & set(data.columns)
+
         if invalid_cols:
             raise ValueError(
                 f"Invalid column names in data: {', '.join(invalid_cols)}"
@@ -199,7 +207,7 @@ Data:
         # self.update_outcome_formula()
         return self
 
-    def calculate_weights(self):
+    def calculate_weights(self) -> None:
         if self.estimand == "PP" and self.switch_weights is None:
             raise ValueError(
                 "Switch weight models are not specified. Use `set_switch_weight_model()`"
@@ -209,16 +217,14 @@ Data:
                 "Censor weight models are not specified. Use `set_censor_weight_model()`"
             )
 
-        self.data.wt = 1
+        self.data.data["wt"] = 1
 
         if self.switch_weights is not None:
             if self.switch_weights is not None:
-                self = calculate_switch_weights(self)
-                self.data.wt *= self.data.wtS
+                calculate_switch_weights(self)
+                self.data.data["wt"] *= self.data.data["wtS"]
 
         if self.censor_weights is not None:
             if self.censor_weights is not None:
-                self = calculate_censor_weights(self)
-                self.data.wt *= self.data.wtC
-
-        return self
+                calculate_censor_weights(self)
+                self.data.data["wt"] *= self.data.data["wtC"]

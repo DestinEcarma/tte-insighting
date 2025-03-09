@@ -32,7 +32,6 @@ def calculate_switch_weights(object):
         "d1"
     ].fitted
     object.switch_weights.data_subset_expr["d1"] = data_1_expr
-    del model_1_index
 
     if "eligible_wts_1" in object.data.data.columns:
         data_0_expr = (object.data.data["am_1"] == 0) & (
@@ -64,7 +63,6 @@ def calculate_switch_weights(object):
         "d0"
     ].fitted
     object.switch_weights.data_subset_expr["d0"] = data_0_expr
-    del model_0_index
 
     if any(
         col in object.data.data.columns

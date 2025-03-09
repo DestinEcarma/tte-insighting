@@ -1,6 +1,7 @@
 import pandas as pd
 
 
+# In the actual `TrialEmulation`` package from R, they used an external C++ function to `censor_func`.
 def censor_func(sw_data: pd.DataFrame) -> pd.DataFrame:
     n = len(sw_data)
 

@@ -10,8 +10,9 @@ from trial_sequence.calculate_weights import (calculate_censor_weights,
                                               calculate_switch_weights)
 from trial_sequence.data_expansion import expand
 from trial_sequence.data_manipulation import data_manipulation
-from trial_sequence.utils import (te_data, te_expansion, te_outcome_model,
-                                  te_stats_glm_logit, te_weights_spec, te_outcome_data)
+from trial_sequence.utils import (te_data, te_expansion, te_outcome_data,
+                                  te_outcome_model, te_stats_glm_logit,
+                                  te_weights_spec)
 
 warnings.simplefilter("ignore", category=RuntimeWarning)
 warnings.simplefilter("ignore", PerfectSeparationWarning)
@@ -365,9 +366,15 @@ IPW for informative censoring:
 
         data = self.data.data.copy()
 
-        eligible = self.data.data['eligible'] == 1
-        first_period = max(self.expansion.first_period, self.data.data.loc[eligible, 'period'].min())
-        last_period = min(self.expansion.last_period, self.data.data.loc[eligible, 'period'].max())
+        eligible = self.data.data["eligible"] == 1
+        first_period = max(
+            self.expansion.first_period,
+            self.data.data.loc[eligible, "period"].min(),
+        )
+        last_period = min(
+            self.expansion.last_period,
+            self.data.data.loc[eligible, "period"].max(),
+        )
         chunk_size = self.expansion.chunk_size
         censor_at_switch = self.expansion.censor_at_switch
 
@@ -395,7 +402,9 @@ IPW for informative censoring:
         if chunk_size == 0:
             ids_split = [all_ids]
         else:
-            ids_split = np.array_split(all_ids, np.ceil(len(all_ids) / chunk_size))
+            ids_split = np.array_split(
+                all_ids, np.ceil(len(all_ids) / chunk_size)
+            )
 
         for ids in ids_split:
             switch_data = expand(
@@ -407,28 +416,48 @@ IPW for informative censoring:
                 maxperiod=last_period,
                 keeplist=keeplist,
             )
-            
+
             self.expansion.datastore.save_expanded_data(switch_data)
 
-    def load_expanded_data(self, p_control: float, period: int = None, subset_condition: str=None, seed: int=None) -> None:
+    def load_expanded_data(
+        self,
+        p_control: float,
+        period: int = None,
+        subset_condition: str = None,
+        seed: int = None,
+    ) -> None:
         assert self.expansion.datastore.N > 0, "N must be positive"
-        assert p_control is None or (0 <= p_control <= 1), "p_control must be between 0 and 1"
-        assert period is None or isinstance(period, int) and period >= 0, "period must be a non-negative integer"
+        assert p_control is None or (
+            0 <= p_control <= 1
+        ), "p_control must be between 0 and 1"
+        assert (
+            period is None or isinstance(period, int) and period >= 0
+        ), "period must be a non-negative integer"
 
         if subset_condition is not None:
-            assert isinstance(subset_condition, str), "subset_condition must be a string"
+            assert isinstance(
+                subset_condition, str
+            ), "subset_condition must be a string"
 
-        assert seed is None or (isinstance(seed, int) and seed >= 0), "seed must be a non-negative integer"
+        assert seed is None or (
+            isinstance(seed, int) and seed >= 0
+        ), "seed must be a non-negative integer"
 
         if p_control is None:
-            data_table = self.expansion.datastore.read_expanded_data(self.expansion.datastore, period=period, subset_condition=subset_condition)
-            data_table['sample_weight'] = 1
+            data_table = self.expansion.datastore.read_expanded_data(
+                self.expansion.datastore,
+                period=period,
+                subset_condition=subset_condition,
+            )
+            data_table["sample_weight"] = 1
         else:
             data_table = self.expansion.datastore.sample_expanded_data(
                 period=period,
                 subset_condition=subset_condition,
                 p_control=p_control,
-                seed=seed
+                seed=seed,
             )
 
-        self.outcome_data = te_outcome_data(data_table, p_control, subset_condition)
+        self.outcome_data = te_outcome_data(
+            data_table, p_control, subset_condition
+        )

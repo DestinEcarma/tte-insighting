@@ -1,8 +1,8 @@
 import os
 import warnings
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 class te_data:
@@ -181,15 +181,25 @@ class te_datastore:
     def __init__(self, N=0):
         self.N = N
 
-    def sample_expanded_data(self, p_control: float, period: int=None, subset_condition:str=None, seed: int=None):
+    def sample_expanded_data(
+        self,
+        p_control: float,
+        period: int = None,
+        subset_condition: str = None,
+        seed: int = None,
+    ):
         old_seed = np.random.get_state()
 
         try:
             np.random.seed(seed)
-            data = self.read_expanded_data(period=period, subset_condition=subset_condition)
+            data = self.read_expanded_data(
+                period=period, subset_condition=subset_condition
+            )
 
             sampled_data = (
-                data.groupby(["trial_period", "followup_time"], group_keys=False)
+                data.groupby(
+                    ["trial_period", "followup_time"], group_keys=False
+                )
                 .apply(lambda df: do_sampling(df, p_control))
                 .reset_index(drop=True)
             )
@@ -197,6 +207,7 @@ class te_datastore:
             return sampled_data
         finally:
             np.random.set_state(old_seed)
+
 
 class te_datastore_datatable(te_datastore):
     data: pd.DataFrame
@@ -215,17 +226,23 @@ N: {self.N} observations
         self.data = pd.concat([self.data, data], ignore_index=True)
         self.N = len(self.data)
 
-    def read_expanded_data(self, period: int=None, subset_condition: str=None):
+    def read_expanded_data(
+        self, period: int = None, subset_condition: str = None
+    ):
         if period is not None:
             if not isinstance(period, (int, list)):
-                raise ValueError("period must be an integer or a list of integers.")
+                raise ValueError(
+                    "period must be an integer or a list of integers."
+                )
             if isinstance(period, int):
                 period = [period]
 
         if period is None:
             data_table = self.data.copy()
         else:
-            data_table = self.data[self.data["trial_period"].isin(period)].copy()
+            data_table = self.data[
+                self.data["trial_period"].isin(period)
+            ].copy()
 
         if subset_condition:
             data_table = data_table.query(subset_condition)
@@ -259,7 +276,7 @@ class te_expansion:
 - First period: {self.first_period} | Last period: {self.last_period}
 {datastore}
         """
-    
+
     def __repr__(self):
         return str(self)
 
@@ -272,13 +289,23 @@ class te_outcome_data:
     p_control: float
     subset_condition: str
 
-    def __init__(self, data, p_control:float=None, subset_condition: str=None):
+    def __init__(
+        self, data, p_control: float = None, subset_condition: str = None
+    ):
         if not isinstance(data, pd.DataFrame):
             raise TypeError("data must be a pandas DataFrame")
 
-        required_columns = {"id", "trial_period", "followup_time", "outcome", "weight"}
+        required_columns = {
+            "id",
+            "trial_period",
+            "followup_time",
+            "outcome",
+            "weight",
+        }
         if not required_columns.issubset(data.columns):
-            raise ValueError(f"Missing required columns: {required_columns - set(data.columns)}")
+            raise ValueError(
+                f"Missing required columns: {required_columns - set(data.columns)}"
+            )
 
         n_rows = len(data)
         if n_rows == 0:
@@ -290,12 +317,13 @@ class te_outcome_data:
         subset_condition = subset_condition or []
         p_control = p_control or []
 
-        self.data=data,
-        self.n_rows=n_rows,
-        self.n_ids=n_ids,
-        self.periods=periods,
-        self.p_control=p_control,
-        self.subset_condition=subset_condition
+        self.data = (data,)
+        self.n_rows = (n_rows,)
+        self.n_ids = (n_ids,)
+        self.periods = (periods,)
+        self.p_control = (p_control,)
+        self.subset_condition = subset_condition
+
 
 def stats_glm_logit(save_path: str) -> te_stats_glm_logit:
     os.makedirs(save_path, exist_ok=True)
@@ -306,6 +334,7 @@ def stats_glm_logit(save_path: str) -> te_stats_glm_logit:
 def save_to_datatable() -> te_datastore_datatable:
     return te_datastore_datatable()
 
+
 def do_sampling(data: pd.DataFrame, p_control: float = 0.01) -> pd.DataFrame:
     cases = data[data["outcome"] == 1].index.to_list()
     controls = data[data["outcome"] == 0].index.to_list()
@@ -314,13 +343,20 @@ def do_sampling(data: pd.DataFrame, p_control: float = 0.01) -> pd.DataFrame:
     n_controls = len(controls)
 
     n_sample = np.random.binomial(n_controls, p_control)
-    control_select = np.random.choice(controls, size=n_sample, replace=False) if n_sample > 0 else []
+    control_select = (
+        np.random.choice(controls, size=n_sample, replace=False)
+        if n_sample > 0
+        else []
+    )
 
     sampled_indices = np.concatenate((cases, control_select))
     sampled_data = data.loc[sampled_indices].copy()
 
     sampled_data["sample_weight"] = np.concatenate(
-        (np.ones(n_cases), np.ones(n_sample) / p_control if n_sample > 0 else [])
+        (
+            np.ones(n_cases),
+            np.ones(n_sample) / p_control if n_sample > 0 else [],
+        )
     )
 
     return sampled_data

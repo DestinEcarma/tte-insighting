@@ -1,9 +1,14 @@
 import os
+import re
 import warnings
-
 import numpy as np
+import tempfile
 import pandas as pd
-
+from statsmodels.formula.api import glm
+from statsmodels.genmod.families import Binomial
+from statsmodels.stats.sandwich_covariance import cov_cluster
+from scipy.stats import multivariate_normal
+from trial_sequence.predict import check_newdata, calculate_survival, calculate_cum_inc, calculate_predictions
 
 class te_data:
     data: pd.DataFrame
@@ -53,6 +58,128 @@ class te_stats_glm_logit(te_model_fitter):
     def __init__(self, save_path: str):
         super().__init__(save_path)
 
+    def fit_outcome_model(self, data, formula, weights=None):
+        if weights is None:
+            data['weights'] = 1
+        else:
+            data['weights'] = weights
+
+        model = glm(formula=formula, data=data, family=Binomial()).fit(weights=data['weights'])
+
+        save_path = None
+
+        if self.save_path is not None:
+            if not os.path.exists(self.save_path):
+                os.makedirs(self.save_path, exist_ok=True)
+
+            file = tempfile.NamedTemporaryFile(dir=self.save_path, prefix="model_", suffix=".pkl", delete=False)
+            model.save(file.name)
+            save_path = pd.DataFrame({'save': [file.name]})
+
+        vcov = cov_cluster(model, group=data['id'])
+
+        model_list = {
+            'model': model,
+            'vcov': vcov
+        }
+
+        summary = {
+            'tidy': model.summary(),
+            'glance': {
+                'params': model.params,
+                'pvalues': model.pvalues,
+                'rsquared_mcfadden': 1 - (model.deviance / model.null_deviance)
+            }
+        }
+
+        if self.save_path is not None:
+            summary['save_path'] = save_path
+
+        return te_stats_glm_logit_outcome_fitted(model=model_list, summary=summary)
+
+
+class te_outcome_fitted:
+    model: dict
+    summary: dict
+
+    def __init__(self, **kwargs):
+        self.model = kwargs.get("model", None)
+        self.summary = kwargs.get("summary", None)
+
+    def __str__(self):
+        if len(self.summary) > 0:
+            return f"""Model Summary:
+
+{self.summary['tidy']}
+
+{self.summary['glance']}
+            """
+        else:
+            return "Use fit_msm() to fit the outcome model"
+
+class te_stats_glm_logit_outcome_fitted(te_outcome_fitted):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def predict(self, newdata, predict_times, conf_int=True, samples=100, type='cum_inc'):
+        type = type.lower()
+
+        if type not in ['cum_inc', 'survival']:
+            raise ValueError("Type must be 'cum_inc' or 'survival'.")
+
+        if not isinstance(predict_times, (list, np.ndarray)) or any(t < 0 for t in predict_times):
+            raise ValueError("predict_times must be a list or array of non-negative integers.")
+
+        if not isinstance(conf_int, bool):
+            raise ValueError("conf_int must be a boolean.")
+
+        if not isinstance(samples, int) or samples < 1:
+            raise ValueError("samples must be a positive integer.")
+
+        coefs_mat = np.array(self.model['model'].params).reshape(1, -1)
+
+        if conf_int:
+            if self.vcov.shape[0] != coefs_mat.shape[1] or self.vcov.shape[1] != coefs_mat.shape[1]:
+                raise ValueError("Variance-covariance matrix dimensions do not match coefficients.")
+
+            coefs_mat = np.vstack([
+                coefs_mat,
+                multivariate_normal.rvs(mean=self.model.params, cov=self.vcov, size=samples)
+            ])
+
+        newdata = check_newdata(newdata, self.model, predict_times)
+
+        pred_fun = calculate_survival if type == "survival" else calculate_cum_inc
+
+        pred_list = calculate_predictions(
+            newdata=newdata,
+            model=self.model,
+            treatment_values={'assigned_treatment_0': 0, 'assigned_treatment_1': 1},
+            pred_fun=pred_fun,
+            coefs_mat=coefs_mat,
+            matrix_n_col=len(predict_times)
+        )
+
+        pred_list['difference'] = pred_list['assigned_treatment_1'] - pred_list['assigned_treatment_0']
+
+        results = {}
+        for col_name in ['assigned_treatment_0', 'assigned_treatment_1', 'difference']:
+            pred_matrix = pred_list[col_name]
+            if conf_int:
+                quantiles = np.quantile(pred_matrix, [0.025, 0.975], axis=0)
+                results[col_name] = pd.DataFrame({
+                    'followup_time': predict_times,
+                    col_name: pred_matrix[0],
+                    '2.5%': quantiles[0],
+                    '97.5%': quantiles[1]
+                })
+            else:
+                results[col_name] = pd.DataFrame({
+                    'followup_time': predict_times,
+                    col_name: pred_matrix[0]
+                })
+
+        return results
 
 class te_weights_spec:
     numerator: str
@@ -173,6 +300,9 @@ class te_outcome_model:
         )
 
         return f"{formula}{treatment_var}{adjustment_vars}{model_fitter}{self.fitted}"
+    
+    def __repr__(self):
+        return str(self)
 
 
 class te_datastore:
@@ -317,11 +447,11 @@ class te_outcome_data:
         subset_condition = subset_condition or []
         p_control = p_control or []
 
-        self.data = (data,)
-        self.n_rows = (n_rows,)
-        self.n_ids = (n_ids,)
-        self.periods = (periods,)
-        self.p_control = (p_control,)
+        self.data = data
+        self.n_rows = n_rows
+        self.n_ids = n_ids
+        self.periods = periods
+        self.p_control = p_control
         self.subset_condition = subset_condition
 
 
@@ -360,3 +490,9 @@ def do_sampling(data: pd.DataFrame, p_control: float = 0.01) -> pd.DataFrame:
     )
 
     return sampled_data
+
+def all_vars(formula: str) -> list:
+    return re.findall(r'(?<![a-zA-Z0-9_])([a-zA-Z_][a-zA-Z0-9_]*)(?![a-zA-Z0-9_])', formula)
+
+def add_rhs(formula1: str, formula2: str) -> str:
+    return f"{formula1} + {formula2}"

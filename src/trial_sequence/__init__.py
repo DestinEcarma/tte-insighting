@@ -1,4 +1,5 @@
 import re
+from functools import reduce
 import warnings
 
 import numpy as np
@@ -12,7 +13,7 @@ from trial_sequence.data_expansion import expand
 from trial_sequence.data_manipulation import data_manipulation
 from trial_sequence.utils import (te_data, te_expansion, te_outcome_data,
                                   te_outcome_model, te_stats_glm_logit,
-                                  te_weights_spec)
+                                  te_weights_spec, all_vars, add_rhs)
 
 warnings.simplefilter("ignore", category=RuntimeWarning)
 warnings.simplefilter("ignore", PerfectSeparationWarning)
@@ -44,6 +45,7 @@ class trial_sequence:
 
         self.expansion = None
         self.outcome_data = None
+        self.outcome_model = None
 
     def __str__(self):
         if self.censor_weights is not None:
@@ -52,9 +54,14 @@ class trial_sequence:
             censor_weights = " - No weight model specified"
 
         if self.switch_weights is not None:
-            switch_weights = f"IPW for treatment switch censoring:\n {str(self.switch_weights)}"
+            switch_weights = f"IPW for treatment switch censoring:\n {str(self.switch_weights)}\n"
         else:
             switch_weights = ""
+
+        if self.data is not None:
+            expansion = f"{self.expansion}\n"
+        else:
+            expansion = ""
 
         return f"""
 Trial Sequence Object
@@ -66,7 +73,10 @@ Data:
 IPW for informative censoring:
 {censor_weights}
 
-{switch_weights}
+{switch_weights}{expansion}
+
+Outcome model:
+{self.outcome_model}
         """
 
     def __repr__(self):
@@ -121,6 +131,29 @@ IPW for informative censoring:
             data=trial_data, nobs=len(trial_data), n=trial_data["id"].nunique()
         )
 
+    def update_outcome_formula(self) -> None:
+        if self.outcome_model is None:
+            return
+
+        self.outcome_model.stabilised_weights_terms = self.get_stabilised_weights_terms()
+
+        formula_list = [
+            "1",
+            self.outcome_model.treatment_terms,
+            self.outcome_model.adjustment_terms,
+            self.outcome_model.followup_time_terms,
+            self.outcome_model.trial_period_terms,
+            self.outcome_model.stabilised_weights_terms
+        ]
+
+        keep = [part for term in formula_list if term for part in term.split("~")]
+        self.outcome_model.formula = f"outcome ~ {reduce(add_rhs, keep)}"
+
+        adjustment_vars = set(all_vars(self.outcome_model.adjustment_terms) + 
+                            all_vars(self.outcome_model.stabilised_weights_terms))
+
+        self.outcome_model.adjustment_vars = list(adjustment_vars - {"1"})
+
     def set_switch_weight_model(
         self,
         numerator="1",
@@ -173,9 +206,7 @@ IPW for informative censoring:
             model_fitter=model_fitter,
         )
 
-        # Too lazy to implement this function
-        # The tutorial does not realy use this
-        # self.update_outcome_formula()
+        self.update_outcome_formula()
 
     def set_censor_weight_model(
         self,
@@ -225,9 +256,7 @@ IPW for informative censoring:
             model_fitter=model_fitter,
         )
 
-        # Too lazy to implement this function
-        # The tutorial does not realy use this
-        # self.update_outcome_formula()
+        self.update_outcome_formula()
 
     def calculate_weights(self) -> None:
         if self.estimand == "PP" and self.switch_weights is None:
@@ -257,7 +286,7 @@ IPW for informative censoring:
         adjustment_terms="1",
         followup_time_terms="followup_time + I(followup_time**2)",
         trial_period_terms="trial_period + I(trial_period**2)",
-        model_fitter=None,
+        model_fitter=te_stats_glm_logit(save_path=None),
     ) -> None:
         if self.estimand == "ITT" or self.estimand == "PP":
             treatment_var = "assigned_treatment"
@@ -277,18 +306,9 @@ IPW for informative censoring:
 
         adjustment = list(
             (
-                set(
-                    re.split(
-                        r"[~,+,-]", formula_list["adjustment"].replace(" ", "")
-                    )
-                )
-                | set(
-                    re.split(
-                        r"[~,+,-]", formula_list["stabilised"].replace(" ", "")
-                    )
-                )
-            )
-            - {"1"}
+                set(all_vars(formula_list["adjustment"]))
+                | set(all_vars(formula_list["stabilised"]))
+            ) - {"1"}
         )
 
         if not set(adjustment).issubset(self.data.data.columns):
@@ -307,9 +327,7 @@ IPW for informative censoring:
             stabilised_weights_terms=formula_list["stabilised"],
         )
 
-        # Too lazy to implement this function
-        # The tutorial does not realy use this
-        # self.update_outcome_formula()
+        self.update_outcome_formula()
 
     def get_stabilised_weights_terms(self) -> str:
         stabilised_terms = "1"
@@ -460,4 +478,42 @@ IPW for informative censoring:
 
         self.outcome_data = te_outcome_data(
             data_table, p_control, subset_condition
+        )
+
+    def fit_msm(self, weight_cols:list=None, modify_weights:callable=None) -> None:
+        if self.outcome_model is None:
+            raise ValueError("Outcome model not set, please run set_outcome_model")
+        if self.expansion.datastore.N == 0:
+            raise ValueError("Datastore is empty, please run expand_trials")
+        if not hasattr(self.outcome_data, 'n_rows') or self.outcome_data.n_rows == 0:
+            raise ValueError("Outcome data is empty, please run load_expanded_data")
+
+        data = self.outcome_data.data
+
+        if weight_cols:
+            if not set(weight_cols).issubset(data.columns):
+                raise ValueError("Some weight columns are missing from outcome_data")
+            data["w"] = data[weight_cols].prod(axis=1)
+        else:
+            data["w"] = 1
+
+        if modify_weights:
+            temp_weights = modify_weights(data["w"])
+            if not np.all((temp_weights >= 0) & np.isfinite(temp_weights)):
+                raise ValueError("Modified weights must be non-negative and finite")
+            data["w"] = temp_weights
+
+        self.outcome_model.fitted = self.outcome_model.model_fitter.fit_outcome_model(
+            data=data,
+            formula=self.outcome_model.formula,
+            weights=data["w"]
+        )
+
+    def predict(self, newdata, predict_times, conf_int=True, samples=100, type='cum_inc'):
+        return self.outcome_model.fitted.predict(
+            newdata=newdata,
+            predict_times=predict_times,
+            conf_int=conf_int,
+            samples=samples,
+            type=type
         )
